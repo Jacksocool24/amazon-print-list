@@ -58,6 +58,8 @@ def build_pdf_html_content(df, image_map, pdf_title):
     styling_css = """
     @page { size: a4 portrait; margin-top: 20pt; margin-bottom: 20pt; margin-left: 25pt; margin-right: 25pt; }
     body { font-family: Helvetica; }
+    .pdf-container { font-size: 9pt; }
+    .header-cell { font-size: 8pt !important; }
     .page-title { text-align: center; font-size: 14pt; font-weight: bold; margin-bottom: 4pt; font-family: Helvetica; }
     .page-footer { text-align: center; font-size: 9pt; font-family: Helvetica; }
     table {
@@ -72,7 +74,7 @@ def build_pdf_html_content(df, image_map, pdf_title):
         border: 0.75pt solid black !important;
         text-align: center;
         vertical-align: middle;
-        font-size: 7.5pt;
+        font-size: 9pt;
         padding: 2px;
         word-break: break-all;
         word-wrap: break-word;
@@ -96,7 +98,7 @@ def build_pdf_html_content(df, image_map, pdf_title):
     td.img-box img { max-width: 100pt; }
     """
 
-    html_content = f"<html><head><meta charset='utf-8'><style>{styling_css}</style></head><body>"
+    html_content = f"<html><head><meta charset='utf-8'><style>{styling_css}</style></head><body><div class='pdf-container'>"
     for i in range(0, len(target_df), 6):
         chunk = target_df.iloc[i : i + 6]
         page_num = (i // 6) + 1
@@ -119,7 +121,7 @@ def build_pdf_html_content(df, image_map, pdf_title):
         html_content += "<table style='table-layout: fixed !important; width: 540pt !important; border-collapse: collapse;'><thead><tr class='header-row'>"
         for idx, h in enumerate(headers):
             col_cls, col_w = col_specs[idx]
-            html_content += f"<th class='{col_cls}' style='width:{col_w}pt;'>{html_lib.escape(excel_text_str(h))}</th>"
+            html_content += f"<th class='{col_cls} header-cell' style='width:{col_w}pt;'>{html_lib.escape(excel_text_str(h))}</th>"
         html_content += "</tr></thead><tbody>"
 
         for row_pos, (row_idx, row) in enumerate(chunk.iterrows()):
@@ -149,14 +151,14 @@ def build_pdf_html_content(df, image_map, pdf_title):
                         f'<td class="col-G" style="width: 42pt; background-color: {bg_color}; '
                         f'text-align: center; border: 0.5pt solid black; vertical-align: middle;">'
                         f'<div style="width: 42pt; word-wrap: break-word; word-break: break-all; '
-                        f'font-size: 8pt; line-height: 1.1;">'
+                        f'font-size: 9pt; line-height: 1.1;">'
                         f'{mat_text}</div></td>'
                     )
                     continue
                 else:
                     td_content = html_lib.escape(excel_text_str(row[col_name]))
                     is_qty_alert = col_name == "数量" and qty_gt_one(row[col_name])
-                    div_style = "word-wrap: break-word; width: 100%; font-size: 8pt;"
+                    div_style = "word-wrap: break-word; width: 100%; font-size: 9pt;"
                     td_style = f"width:{col_w}pt;"
                     td_cls = col_cls
                     if is_qty_alert:
@@ -177,7 +179,7 @@ def build_pdf_html_content(df, image_map, pdf_title):
         html_content += f"<div class='page-footer'>Page {page_num}</div>"
         if i + 6 < len(target_df):
             html_content += "<pdf:nextpage />"
-    html_content += "</body></html>"
+    html_content += "</div></body></html>"
 
     return html_content
 
@@ -293,12 +295,30 @@ def _draw_native_pdf(df, image_map, pdf_title):
     display_cols = list(df.columns[3:15])
     img_col_name = display_cols[2]
 
+    id1_values = [excel_text_str(df.iloc[i, 3]) for i in range(n)]
+    group_start_idx = [0] * n
+    group_end_idx = [0] * n
+    gs = 0
+    while gs < n:
+        ge = gs
+        while ge + 1 < n and id1_values[ge + 1] == id1_values[gs]:
+            ge += 1
+        for k in range(gs, ge + 1):
+            group_start_idx[k] = gs
+            group_end_idx[k] = ge
+        gs = ge + 1
+
     global_page = 0
     for start in range(0, n, MAX_ROWS_PAGE):
         global_page += 1
         chunk_len = min(MAX_ROWS_PAGE, n - start)
-        chunk_vals = [excel_text_str(df.iloc[start + i, 3]) for i in range(chunk_len)]
-        rowspan_start, rowspan_skip = _rowspan_maps(chunk_vals)
+        page_end_pos = start + chunk_len - 1
+        page_ids = [id1_values[start + i] for i in range(chunk_len)]
+        page_continuation_ids = set()
+        for i, pid in enumerate(page_ids):
+            gpos = start + i
+            if gpos > group_start_idx[gpos]:
+                page_continuation_ids.add(pid)
 
         y_top = PAGE_H - MARGIN
         c.setFillColor(colors.black)
@@ -313,7 +333,7 @@ def _draw_native_pdf(df, image_map, pdf_title):
             c.setFillColor(colors.white)
             c.rect(x0, y_header_bottom, COL_WIDTHS[j], HEADER_H, stroke=1, fill=1)
             c.setFillColor(colors.black)
-            c.setFont("Helvetica-Bold", 7)
+            c.setFont("Helvetica-Bold", 8)
             c.drawCentredString(x0 + COL_WIDTHS[j] / 2, y_header_bottom + HEADER_H / 2 - 3, HEADERS_EN[j])
 
         for row_pos in range(chunk_len):
@@ -326,19 +346,42 @@ def _draw_native_pdf(df, image_map, pdf_title):
                 x0 = _col_x(ci)
                 w = COL_WIDTHS[ci]
 
-                if ci == 0 and row_pos in rowspan_skip:
-                    continue
-
-                span = rowspan_start.get(row_pos, 1) if ci == 0 else 1
-                if ci == 0 and span > 1:
-                    cell_h = span * ROW_H
-                    y_cell_bot = y_row_top - cell_h
-                else:
-                    cell_h = ROW_H
-                    y_cell_bot = y_row_bot
-
                 c.setStrokeColor(colors.black)
                 c.setLineWidth(0.75)
+                cell_h = ROW_H
+                y_cell_bot = y_row_bot
+
+                if ci == 0:
+                    curr_id1 = id1_values[pos]
+                    is_group_start = pos == group_start_idx[pos]
+                    is_group_end = pos == group_end_idx[pos]
+                    is_page_start = row_pos == 0
+
+                    # ID1 column uses open borders to indicate continuation.
+                    c.setFillColor(colors.white)
+                    c.rect(x0, y_cell_bot, w, cell_h, stroke=0, fill=1)
+                    c.setStrokeColor(colors.black)
+                    c.line(x0, y_cell_bot, x0, y_cell_bot + cell_h)  # left
+                    c.line(x0 + w, y_cell_bot, x0 + w, y_cell_bot + cell_h)  # right
+                    # Keep continuation rows visually open upward on new pages.
+                    if is_group_start:
+                        c.line(x0, y_cell_bot + cell_h, x0 + w, y_cell_bot + cell_h)  # top
+                    if is_group_end:
+                        c.line(x0, y_cell_bot, x0 + w, y_cell_bot)  # bottom
+
+                    # Cross-page awareness: if the ID on this page is continuation
+                    # from previous pages, never render ID1 text on this page.
+                    should_draw_id1_text = is_group_start and curr_id1 not in page_continuation_ids
+                    if should_draw_id1_text:
+                        # Center in current row, then sink by half of rows that
+                        # continue on later pages: offset = N * ROW_H / 2.
+                        continuation_rows = max(0, group_end_idx[pos] - page_end_pos)
+                        sink_offset = (continuation_rows * ROW_H) / 2.0
+                        y_base = y_cell_bot + (cell_h / 2.0) - 3 - sink_offset
+                        c.setFillColor(colors.black)
+                        c.setFont("Helvetica", 9)
+                        c.drawCentredString(x0 + w / 2.0, y_base, curr_id1)
+                    continue
 
                 if col_name == "材质":
                     mat_raw = full_row[col_name]
@@ -346,7 +389,7 @@ def _draw_native_pdf(df, image_map, pdf_title):
                     c.setFillColor(colors.yellow if mat_show.strip() != "Canvas" else colors.white)
                     c.rect(x0, y_cell_bot, w, cell_h, stroke=1, fill=1)
                     _draw_wrapped_centred_column(
-                        c, x0, w, y_cell_bot, cell_h, mat_show, "Helvetica", 8
+                        c, x0, w, y_cell_bot, cell_h, mat_show, "Helvetica", 9
                     )
                     continue
 
@@ -373,20 +416,20 @@ def _draw_native_pdf(df, image_map, pdf_title):
                             c.drawImage(ImageReader(bbuf), xi, yi, width=dw, height=dh, mask="auto")
                         except Exception:
                             _draw_wrapped_centred_column(
-                                c, x0, w, y_cell_bot, cell_h, "No image", "Helvetica", 7
+                                c, x0, w, y_cell_bot, cell_h, "No image", "Helvetica", 9
                             )
                     else:
                         _draw_wrapped_centred_column(
-                            c, x0, w, y_cell_bot, cell_h, "No image", "Helvetica", 7
+                            c, x0, w, y_cell_bot, cell_h, "No image", "Helvetica", 9
                         )
                 else:
                     txt = excel_text_str(full_row[col_name])
                     _draw_wrapped_centred_column(
-                        c, x0, w, y_cell_bot, cell_h, txt, "Helvetica", 7.5
+                        c, x0, w, y_cell_bot, cell_h, txt, "Helvetica", 9
                     )
 
         c.setFillColor(colors.black)
-        c.setFont("Helvetica", 8)
+        c.setFont("Helvetica", 9)
         c.drawString(MARGIN, MARGIN / 2, f"Page {global_page}")
         if start + MAX_ROWS_PAGE < n:
             c.showPage()
