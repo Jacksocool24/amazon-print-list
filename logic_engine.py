@@ -277,8 +277,8 @@ def save_to_excel_with_merge(df, source_file_bytes, image_map):
     ws.column_dimensions["F"].width = 28
     source_ws.column_dimensions["C"].width = 35
     row_height_pt = 240
-    body_font = Font(name="Microsoft YaHei", size=11)
-    header_font = Font(name="Microsoft YaHei", size=11, bold=True)
+    body_font = Font(name="SimSun", size=11, bold=True)
+    header_font = Font(name="SimSun", size=12, bold=True)
     header_fill = PatternFill(fill_type="solid", fgColor="EDEDED")
     thin_side = Side(style="thin", color="000000")
     thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
@@ -377,12 +377,21 @@ def save_to_excel_with_merge(df, source_file_bytes, image_map):
         hcell.border = thin_border
 
     d_list = df["序号D"].tolist()
+    d_count_map = {}
+    for d_val in d_list:
+        key = excel_text_str(d_val)
+        d_count_map[key] = d_count_map.get(key, 0) + 1
     n = len(d_list)
     start = 0
     while start < n:
         end = start
         while end + 1 < n and d_list[end + 1] == d_list[start]:
             end += 1
+        d_key = excel_text_str(d_list[start])
+        if d_count_map.get(d_key, 0) > 1:
+            top_cell = ws.cell(row=start + 2, column=4)
+            top_cell.fill = PatternFill(fill_type="solid", fgColor="FFFF00")
+            top_cell.font = Font(name=body_font.name, size=body_font.size, bold=True)
         if end > start:
             ws.merge_cells(
                 start_row=start + 2,

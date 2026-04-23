@@ -4,14 +4,43 @@ HTML mirror for Streamlit preview; PDF export uses ReportLab canvas only (no xht
 import io
 import base64
 import html as html_lib
+import os
 from PIL import Image
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.pdfmetrics import stringWidth as pdf_stringWidth
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as rl_canvas
 
 from logic_engine import excel_text_str, qty_gt_one, resolve_row_image_bytes
+
+
+def _register_pdf_fonts():
+    """Register a Chinese-capable font; fallback safely when unavailable."""
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    font_dir = os.path.join(windir, "Fonts")
+    simsun_candidates = [
+        os.path.join(font_dir, "simsun.ttc"),
+        os.path.join(font_dir, "simsun.ttf"),
+    ]
+    for font_path in simsun_candidates:
+        try:
+            pdfmetrics.registerFont(TTFont("SimSun", font_path))
+            pdfmetrics.registerFont(TTFont("SimSun-Bold", font_path))
+            return "SimSun", "SimSun-Bold"
+        except Exception:
+            continue
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+        return "STSong-Light", "STSong-Light"
+    except Exception:
+        return "Helvetica", "Helvetica-Bold"
+
+
+PDF_FONT_NAME, PDF_FONT_BOLD_NAME = _register_pdf_fonts()
 
 
 def build_pdf_html_content(df, image_map, pdf_title):
@@ -23,14 +52,14 @@ def build_pdf_html_content(df, image_map, pdf_title):
         target_df["材质"] = target_df["材质"].replace("画芯", "Canvas")
     col_specs = [
         ("col-D", 20),
-        ("col-E", 25),
+        ("col-E", 30),
         ("col-F", 105),
         ("col-G", 42),
         ("col-H", 30),
         ("col-I", 20),
         ("col-J", 45),
         ("col-K", 75),
-        ("col-L", 30),
+        ("col-L", 65),
         ("col-M", 55),
         ("col-N", 25),
         ("col-O", 50),
@@ -57,11 +86,11 @@ def build_pdf_html_content(df, image_map, pdf_title):
 
     styling_css = """
     @page { size: a4 portrait; margin-top: 20pt; margin-bottom: 20pt; margin-left: 25pt; margin-right: 25pt; }
-    body { font-family: Helvetica; }
+    body { font-family: "SimSun", "STSong", serif; font-weight: bold; color: #000000; }
     .pdf-container { font-size: 9pt; }
-    .header-cell { font-size: 8pt !important; }
-    .page-title { text-align: center; font-size: 14pt; font-weight: bold; margin-bottom: 4pt; font-family: Helvetica; }
-    .page-footer { text-align: center; font-size: 9pt; font-family: Helvetica; }
+    .header-cell { font-size: 13px !important; color: #000000; }
+    .page-title { text-align: center; font-size: 14pt; font-weight: bold; margin-bottom: 4pt; font-family: "SimSun", "STSong", serif; }
+    .page-footer { text-align: center; font-size: 9pt; font-family: "SimSun", "STSong", serif; }
     table {
         table-layout: fixed !important;
         width: 540pt !important;
@@ -74,14 +103,16 @@ def build_pdf_html_content(df, image_map, pdf_title):
         border: 0.75pt solid black !important;
         text-align: center;
         vertical-align: middle;
-        font-size: 9pt;
+        font-size: 13px;
         padding: 2px;
         word-break: break-all;
         word-wrap: break-word;
+        font-weight: bold;
+        color: #000000;
     }
-    th, td { font-family: Helvetica; }
+    th, td { font-family: "SimSun", "STSong", serif; }
     .col-D { width: 20pt !important; }
-    .col-E { width: 25pt !important; }
+    .col-E { width: 30pt !important; }
     .col-F { width: 105pt !important; }
     .col-G {
         width: 42pt !important;
@@ -90,7 +121,7 @@ def build_pdf_html_content(df, image_map, pdf_title):
     .col-I { width: 20pt !important; }
     .col-J { width: 45pt !important; }
     .col-K { width: 75pt !important; }
-    .col-L { width: 30pt !important; }
+    .col-L { width: 65pt !important; }
     .col-M { width: 55pt !important; }
     .col-N { width: 25pt !important; }
     .col-O { width: 50pt !important; }
@@ -98,6 +129,7 @@ def build_pdf_html_content(df, image_map, pdf_title):
     td.img-box img { max-width: 100pt; }
     """
 
+    id1_count_map = target_df[target_df.columns[0]].map(excel_text_str).value_counts().to_dict()
     html_content = f"<html><head><meta charset='utf-8'><style>{styling_css}</style></head><body><div class='pdf-container'>"
     for i in range(0, len(target_df), 6):
         chunk = target_df.iloc[i : i + 6]
@@ -149,21 +181,25 @@ def build_pdf_html_content(df, image_map, pdf_title):
 
                     html_content += (
                         f'<td class="col-G" style="width: 42pt; background-color: {bg_color}; '
-                        f'text-align: center; border: 0.5pt solid black; vertical-align: middle;">'
+                        f'text-align: center; border: 0.5pt solid black; vertical-align: middle; color: #000000; font-weight: bold;">'
                         f'<div style="width: 42pt; word-wrap: break-word; word-break: break-all; '
-                        f'font-size: 9pt; line-height: 1.1;">'
+                        f'font-size: 13px; line-height: 1.1; color: #000000; font-weight: bold;">'
                         f'{mat_text}</div></td>'
                     )
                     continue
                 else:
                     td_content = html_lib.escape(excel_text_str(row[col_name]))
                     is_qty_alert = col_name == "数量" and qty_gt_one(row[col_name])
-                    div_style = "word-wrap: break-word; width: 100%; font-size: 9pt;"
+                    is_id1_merge_alert = idx == 0 and id1_count_map.get(excel_text_str(row[col_name]), 0) > 1
+                    div_style = "word-wrap: break-word; width: 100%; font-size: 13px; color: #000000; font-weight: bold;"
                     td_style = f"width:{col_w}pt;"
                     td_cls = col_cls
                     if is_qty_alert:
                         div_style += " background-color: yellow; font-weight: bold;"
                         td_style += " background-color: yellow; font-weight: bold;"
+                    if is_id1_merge_alert:
+                        div_style += " background-color: #FFFF00; font-weight: bold;"
+                        td_style += " background-color: #FFFF00; font-weight: bold;"
                     if idx == 0:
                         td_style += " vertical-align: middle; text-align: center;"
                     td_content = f"<div style='{div_style}'>{td_content}</div>"
@@ -192,7 +228,7 @@ TITLE_BLOCK = 32
 HEADER_H = 16
 ROW_H = 120
 MAX_ROWS_PAGE = 6
-COL_WIDTHS = [20, 25, 105, 42, 30, 20, 45, 75, 30, 55, 25, 50]
+COL_WIDTHS = [20, 30, 105, 42, 30, 20, 45, 75, 25, 55, 25, 50]
 HEADERS_EN = ["ID1", "ID2", "IMG", "MAT", "SIZE", "QTY", "NAME", "ADDR1", "ADDR2", "CITY", "STATE", "ZIP"]
 
 
@@ -236,7 +272,7 @@ def _wrap_text(text, max_width, font_name, font_size, c=None):
 
 
 def _draw_wrapped_centred_column(
-    c, x_left, cell_w, y_cell_bot, cell_h, text, font_name, font_size
+    c, x_left, cell_w, y_cell_bot, cell_h, text, font_name, font_size, prefer_single_line=False
 ):
     """
     D–O text cells: measured wrap + geometric vertical center.
@@ -244,11 +280,23 @@ def _draw_wrapped_centred_column(
     """
     pad = 4.0
     max_w = max(1.0, cell_w - 2 * pad)
-    line_h = font_size * 1.18
-    ascent = font_size * 0.72
-    c.setFont(font_name, font_size)
     c.setFillColor(colors.black)
-    lines = _wrap_text(text, max_w, font_name, font_size, c)
+    content = excel_text_str(text)
+    lines = []
+    use_font_size = font_size
+    if prefer_single_line and content:
+        # Keep ID2 as single-line whenever possible by shrinking font first.
+        while use_font_size > 6 and c.stringWidth(content, font_name, use_font_size) > max_w:
+            use_font_size -= 0.5
+        if c.stringWidth(content, font_name, use_font_size) <= max_w:
+            lines = [content]
+        else:
+            use_font_size = font_size
+    c.setFont(font_name, use_font_size)
+    if not lines:
+        lines = _wrap_text(content, max_w, font_name, use_font_size, c)
+    line_h = use_font_size * 1.18
+    ascent = use_font_size * 0.72
     total_text_h = len(lines) * line_h
     start_y = y_cell_bot + (cell_h + total_text_h) / 2 - ascent
     cx = x_left + cell_w / 2
@@ -287,7 +335,7 @@ def _draw_native_pdf(df, image_map, pdf_title):
     n = len(df)
     if n == 0:
         c.setFillColor(colors.black)
-        c.setFont("Helvetica", 12)
+        c.setFont(PDF_FONT_NAME, 12)
         c.drawString(MARGIN, PAGE_H / 2, "No data")
         c.save()
         return buf.getvalue()
@@ -296,33 +344,26 @@ def _draw_native_pdf(df, image_map, pdf_title):
     img_col_name = display_cols[2]
 
     id1_values = [excel_text_str(df.iloc[i, 3]) for i in range(n)]
-    group_start_idx = [0] * n
-    group_end_idx = [0] * n
-    gs = 0
-    while gs < n:
-        ge = gs
-        while ge + 1 < n and id1_values[ge + 1] == id1_values[gs]:
-            ge += 1
-        for k in range(gs, ge + 1):
-            group_start_idx[k] = gs
-            group_end_idx[k] = ge
-        gs = ge + 1
-
+    id1_count_map = {}
+    for val in id1_values:
+        id1_count_map[val] = id1_count_map.get(val, 0) + 1
     global_page = 0
     for start in range(0, n, MAX_ROWS_PAGE):
         global_page += 1
         chunk_len = min(MAX_ROWS_PAGE, n - start)
-        page_end_pos = start + chunk_len - 1
         page_ids = [id1_values[start + i] for i in range(chunk_len)]
-        page_continuation_ids = set()
-        for i, pid in enumerate(page_ids):
-            gpos = start + i
-            if gpos > group_start_idx[gpos]:
-                page_continuation_ids.add(pid)
+        page_id1_runs = []
+        run_start = 0
+        while run_start < chunk_len:
+            run_end = run_start
+            while run_end + 1 < chunk_len and page_ids[run_end + 1] == page_ids[run_start]:
+                run_end += 1
+            page_id1_runs.append((run_start, run_end, page_ids[run_start]))
+            run_start = run_end + 1
 
         y_top = PAGE_H - MARGIN
         c.setFillColor(colors.black)
-        c.setFont("Helvetica-Bold", 14)
+        c.setFont(PDF_FONT_BOLD_NAME, 14)
         c.drawCentredString(PAGE_W / 2, y_top - 18, excel_text_str(pdf_title))
 
         y_header_top = y_top - TITLE_BLOCK
@@ -333,7 +374,7 @@ def _draw_native_pdf(df, image_map, pdf_title):
             c.setFillColor(colors.white)
             c.rect(x0, y_header_bottom, COL_WIDTHS[j], HEADER_H, stroke=1, fill=1)
             c.setFillColor(colors.black)
-            c.setFont("Helvetica-Bold", 8)
+            c.setFont(PDF_FONT_BOLD_NAME, 10.5)
             c.drawCentredString(x0 + COL_WIDTHS[j] / 2, y_header_bottom + HEADER_H / 2 - 3, HEADERS_EN[j])
 
         for row_pos in range(chunk_len):
@@ -352,35 +393,7 @@ def _draw_native_pdf(df, image_map, pdf_title):
                 y_cell_bot = y_row_bot
 
                 if ci == 0:
-                    curr_id1 = id1_values[pos]
-                    is_group_start = pos == group_start_idx[pos]
-                    is_group_end = pos == group_end_idx[pos]
-                    is_page_start = row_pos == 0
-
-                    # ID1 column uses open borders to indicate continuation.
-                    c.setFillColor(colors.white)
-                    c.rect(x0, y_cell_bot, w, cell_h, stroke=0, fill=1)
-                    c.setStrokeColor(colors.black)
-                    c.line(x0, y_cell_bot, x0, y_cell_bot + cell_h)  # left
-                    c.line(x0 + w, y_cell_bot, x0 + w, y_cell_bot + cell_h)  # right
-                    # Keep continuation rows visually open upward on new pages.
-                    if is_group_start:
-                        c.line(x0, y_cell_bot + cell_h, x0 + w, y_cell_bot + cell_h)  # top
-                    if is_group_end:
-                        c.line(x0, y_cell_bot, x0 + w, y_cell_bot)  # bottom
-
-                    # Cross-page awareness: if the ID on this page is continuation
-                    # from previous pages, never render ID1 text on this page.
-                    should_draw_id1_text = is_group_start and curr_id1 not in page_continuation_ids
-                    if should_draw_id1_text:
-                        # Center in current row, then sink by half of rows that
-                        # continue on later pages: offset = N * ROW_H / 2.
-                        continuation_rows = max(0, group_end_idx[pos] - page_end_pos)
-                        sink_offset = (continuation_rows * ROW_H) / 2.0
-                        y_base = y_cell_bot + (cell_h / 2.0) - 3 - sink_offset
-                        c.setFillColor(colors.black)
-                        c.setFont("Helvetica", 9)
-                        c.drawCentredString(x0 + w / 2.0, y_base, curr_id1)
+                    # ID1 column is rendered as merged blocks after row rendering.
                     continue
 
                 if col_name == "材质":
@@ -389,7 +402,7 @@ def _draw_native_pdf(df, image_map, pdf_title):
                     c.setFillColor(colors.yellow if mat_show.strip() != "Canvas" else colors.white)
                     c.rect(x0, y_cell_bot, w, cell_h, stroke=1, fill=1)
                     _draw_wrapped_centred_column(
-                        c, x0, w, y_cell_bot, cell_h, mat_show, "Helvetica", 9
+                        c, x0, w, y_cell_bot, cell_h, mat_show, PDF_FONT_BOLD_NAME, 10
                     )
                     continue
 
@@ -416,20 +429,35 @@ def _draw_native_pdf(df, image_map, pdf_title):
                             c.drawImage(ImageReader(bbuf), xi, yi, width=dw, height=dh, mask="auto")
                         except Exception:
                             _draw_wrapped_centred_column(
-                                c, x0, w, y_cell_bot, cell_h, "No image", "Helvetica", 9
+                                c, x0, w, y_cell_bot, cell_h, "No image", PDF_FONT_BOLD_NAME, 10
                             )
                     else:
                         _draw_wrapped_centred_column(
-                            c, x0, w, y_cell_bot, cell_h, "No image", "Helvetica", 9
+                            c, x0, w, y_cell_bot, cell_h, "No image", PDF_FONT_BOLD_NAME, 10
                         )
                 else:
                     txt = excel_text_str(full_row[col_name])
                     _draw_wrapped_centred_column(
-                        c, x0, w, y_cell_bot, cell_h, txt, "Helvetica", 9
+                        c, x0, w, y_cell_bot, cell_h, txt, PDF_FONT_BOLD_NAME, 10, prefer_single_line=(ci == 1)
                     )
 
+        # Draw ID1 merged blocks for this page.
+        id1_x = _col_x(0)
+        id1_w = COL_WIDTHS[0]
+        c.setStrokeColor(colors.black)
+        c.setLineWidth(0.75)
+        for run_start, run_end, run_id in page_id1_runs:
+            y_run_top = y_header_bottom - run_start * ROW_H
+            y_run_bot = y_header_bottom - (run_end + 1) * ROW_H
+            is_merged_id1 = id1_count_map.get(run_id, 0) > 1
+            c.setFillColor(colors.yellow if is_merged_id1 else colors.white)
+            c.rect(id1_x, y_run_bot, id1_w, y_run_top - y_run_bot, stroke=1, fill=1)
+            c.setFillColor(colors.black)
+            c.setFont(PDF_FONT_BOLD_NAME, 10.5)
+            c.drawCentredString(id1_x + id1_w / 2.0, y_run_bot + (y_run_top - y_run_bot) / 2.0 - 3, run_id)
+
         c.setFillColor(colors.black)
-        c.setFont("Helvetica", 9)
+        c.setFont(PDF_FONT_BOLD_NAME, 10)
         c.drawString(MARGIN, MARGIN / 2, f"Page {global_page}")
         if start + MAX_ROWS_PAGE < n:
             c.showPage()
