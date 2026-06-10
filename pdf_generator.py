@@ -471,30 +471,24 @@ def generate_pdf_with_images(df, image_map, pdf_title):
     return _draw_native_pdf(df, image_map, pdf_title)
 
 
-def _resolve_poppler_path():
-    """Optional Poppler bin directory for pdf2image on Windows."""
-    path = (os.environ.get("POPPLER_PATH") or "").strip()
-    return path or None
+def pdf_to_images_zip(pdf_bytes, pdf_title):
+    """Convert final PDF pages to PNG files via PyMuPDF and return an in-memory ZIP archive."""
+    import fitz
 
-
-def pdf_to_images_zip(pdf_bytes, safe_title):
-    """Convert final PDF pages to JPG files and return an in-memory ZIP archive."""
-    from pdf2image import convert_from_bytes
-
-    poppler_path = _resolve_poppler_path()
-    convert_kwargs = {"fmt": "jpeg"}
-    if poppler_path:
-        convert_kwargs["poppler_path"] = poppler_path
-
-    images = convert_from_bytes(pdf_bytes, **convert_kwargs)
-    seq_width = max(2, len(str(len(images))))
-
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for page_idx, image in enumerate(images, start=1):
-            filename = f"0-{page_idx:0{seq_width}d}-{safe_title}.jpg"
-            img_buffer = io.BytesIO()
-            image.save(img_buffer, format="JPEG")
-            zf.writestr(filename, img_buffer.getvalue())
+
+    try:
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                img_data = pix.tobytes("png")
+
+                seq = str(page_num + 1).zfill(2)
+                img_name = f"0-{seq}-{pdf_title}.png"
+                zip_file.writestr(img_name, img_data)
+    finally:
+        doc.close()
 
     return zip_buffer.getvalue()
