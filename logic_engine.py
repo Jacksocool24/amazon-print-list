@@ -2,6 +2,7 @@
 Data processing, image indexing, and Excel export.
 """
 import io
+import re
 import base64
 import pandas as pd
 from PIL import Image, ImageStat
@@ -407,4 +408,272 @@ def save_to_excel_with_merge(df, source_file_bytes, image_map):
     ws.print_options.horizontalCentered = True
 
     wb.save(output)
+    return output.getvalue()
+
+
+def generate_rename_list(df):
+    """Build image-rename list from final print list: B→原图片名称, A→新图片名称, Q→分类备注."""
+    rename_df = pd.DataFrame(
+        {
+            "原图片名称": df["purchase-date"].map(excel_text_str),
+            "新图片名称": df["运单号"].map(excel_text_str),
+            "分类备注": df["图片名称"].map(excel_text_str),
+        }
+    )
+    output = io.BytesIO()
+    rename_df.to_excel(output, index=False, engine="openpyxl")
+    return output.getvalue()
+
+
+PRINT_LIST_COL_SEQ_D = "序号D"
+PRINT_LIST_COL_MATERIAL = "材质"
+PRINT_LIST_COL_SIZE = "尺寸"
+PRINT_LIST_EXCEL_D = "D"
+PRINT_LIST_EXCEL_G = "G"
+PRINT_LIST_EXCEL_H = "H"
+
+SHIPPING_HEADER = [
+    "*仓库编码",
+    "*国家编码",
+    "*渠道编码",
+    "参考编号1",
+    "参考编号2",
+    "参考编号3",
+    "签收服务",
+    "*是否是FBA",
+    "FBA仓库编码",
+    "收件人联系人",
+    "收件人公司",
+    "收件人邮编",
+    "收件人地址第一行",
+    "收件人地址第二行",
+    "收件人城市",
+    "收件人州",
+    "收件人电话",
+    "收件人Email",
+    "发件人联系人",
+    "发件人公司",
+    "发件人地址第一行",
+    "发件人地址第二行",
+    "发件人城市",
+    "发件人身份证号",
+    "发件人州",
+    "发件人国家编码",
+    "发件人邮编",
+    "发件人电话",
+    "发件人Email",
+    "发件人税号",
+    "申报币种",
+    "尺寸单位",
+    "预报重量单位",
+    "*箱数",
+    "*重量(KG)",
+    "*长(CM)",
+    "*宽(CM)",
+    "*高(CM)",
+    "申报中文.1",
+    "申报英文.1",
+    "数量.1",
+    "价值.1",
+    "申报重量.1",
+    "产品SKU.1",
+]
+
+
+def _normalize_date_part(date_part):
+    """Normalize title date, e.g. '6.9' -> '0609', '4.20' -> '0420'."""
+    date_part = (date_part or "").strip()
+    if not date_part:
+        return ""
+    if "." in date_part:
+        month, day = date_part.split(".", 1)
+        return month.zfill(2) + day.zfill(2)
+    date_str = date_part.replace(".", "")
+    return date_str.zfill(4)
+
+
+def _parse_pdf_title(pdf_title):
+    """Extract short code and normalized date from PDF title, e.g. '4.20_Order List_XM'."""
+    title = (pdf_title or "").strip()
+    if not title:
+        return "XM", ""
+    parts = title.split("_")
+    if len(parts) >= 2:
+        return parts[-1], _normalize_date_part(parts[0])
+    return title, _normalize_date_part(title)
+
+
+def _is_valid_seq_d(val):
+    text = excel_text_str(val)
+    return bool(text) and text != "0"
+
+
+def _size_to_numeric(size_val):
+    try:
+        return int(float(str(size_val).strip()))
+    except Exception:
+        return 0
+
+
+def _validate_print_list_columns(df):
+    """Ensure final print-list columns match Excel D/G/H mapping before shipping export."""
+    required = [
+        PRINT_LIST_COL_SEQ_D,
+        PRINT_LIST_COL_MATERIAL,
+        PRINT_LIST_COL_SIZE,
+        "purchase-date",
+        "姓名",
+        "邮编",
+        "地址一",
+        "地址二",
+        "城市",
+        "州",
+        "电话",
+    ]
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise ValueError(
+            f"最终打印清单缺少必要列: {missing}；当前列名为: {list(df.columns)}"
+        )
+
+
+def _read_print_list_value(row, col_name):
+    """Read one print-list field by stable column name (never positional index)."""
+    if col_name not in row.index:
+        raise KeyError(
+            f"列 '{col_name}' 不存在于最终打印清单，当前列名为: {list(row.index)}"
+        )
+    return row[col_name]
+
+
+def _add_excel_column_aliases(df):
+    """Expose Excel D/G/H aliases on merged print-list rows for AJ calculation."""
+    aliased = df.copy()
+    aliased[PRINT_LIST_EXCEL_D] = aliased[PRINT_LIST_COL_SEQ_D]
+    aliased[PRINT_LIST_EXCEL_G] = aliased[PRINT_LIST_COL_MATERIAL]
+    aliased[PRINT_LIST_EXCEL_H] = aliased[PRINT_LIST_COL_SIZE]
+    return aliased
+
+
+def _merge_print_list_by_seq_d(df):
+    """Dedupe by D column: keep first row; attach all G/H pairs for multi-piece AJ calc."""
+    work = df.loc[df[PRINT_LIST_COL_SEQ_D].apply(_is_valid_seq_d)].copy()
+    merged_rows = []
+
+    for _, grp in work.groupby(PRINT_LIST_COL_SEQ_D, sort=False):
+        rep = grp.iloc[0].copy()
+        rep["_group_count"] = len(grp)
+        rep["_group_g_list"] = grp[PRINT_LIST_COL_MATERIAL].tolist()
+        rep["_group_h_list"] = grp[PRINT_LIST_COL_SIZE].tolist()
+        merged_rows.append(rep)
+
+    merged = pd.DataFrame(merged_rows).reset_index(drop=True)
+    return _add_excel_column_aliases(merged)
+
+
+def get_inch_val(g_val, h_val):
+    """Convert one print-list row to inch baseline (no +1). Canvas uses H; non-Canvas uses G."""
+    if "Canvas" in str(g_val):
+        h_str = str(abs(_size_to_numeric(h_val)))
+        if len(h_str) >= 4:
+            return int(h_str[:2])
+        if len(h_str) == 3:
+            return int(h_str[0])
+        return 0
+
+    try:
+        match = re.search(r"(\d+)", str(g_val))
+        if not match:
+            return 0
+        num = float(match.group(1))
+        return int(round(num / 2.54))
+    except Exception:
+        return 0
+
+
+def calculate_aj(row):
+    """Compute *长(CM): max inch across all D-group rows, then +1."""
+    g_list = row["_group_g_list"]
+    h_list = row["_group_h_list"]
+    group_count = int(row.get("_group_count", 1))
+
+    inch_vals = [get_inch_val(g_val, h_val) for g_val, h_val in zip(g_list, h_list)]
+    print(
+        f"DEBUG AJ D组 group_count={group_count}, "
+        f"G列表={g_list}, H列表={h_list}, 英寸值={inch_vals}"
+    )
+
+    max_inch = max(inch_vals) if inch_vals else 0
+    return max_inch + 1
+
+
+def _empty_shipping_row():
+    return {col: "" for col in SHIPPING_HEADER}
+
+
+def _build_shipping_data_row(print_row, short_code, date_str):
+    """Map legacy A-AQ fill rules onto named shipping-template columns."""
+    row = _empty_shipping_row()
+
+    ai_val = 1
+    aj_val = print_row["_aj_value"]
+    c_val = "AMAZON_SHIPPING-GROUND_1_6" if ai_val <= 6 else "OnTrac"
+
+    seq_d = excel_text_str(_read_print_list_value(print_row, PRINT_LIST_COL_SEQ_D))
+    order_no = excel_text_str(_read_print_list_value(print_row, "purchase-date"))
+    name = excel_text_str(_read_print_list_value(print_row, "姓名"))
+    ref_id = f"{short_code}-{date_str}-{seq_d}"
+
+    row["*仓库编码"] = "PRINKO-CA"
+    row["*国家编码"] = "US"
+    row["*渠道编码"] = c_val
+    row["参考编号1"] = f"{ref_id}-{order_no}"
+    row["收件人联系人"] = f"{ref_id}-{name}"
+    row["收件人邮编"] = excel_text_str(_read_print_list_value(print_row, "邮编"))
+    row["收件人地址第一行"] = excel_text_str(_read_print_list_value(print_row, "地址一"))
+    row["收件人地址第二行"] = excel_text_str(_read_print_list_value(print_row, "地址二"))
+    row["收件人城市"] = excel_text_str(_read_print_list_value(print_row, "城市"))
+    row["收件人州"] = excel_text_str(_read_print_list_value(print_row, "州"))
+    row["收件人电话"] = excel_text_str(_read_print_list_value(print_row, "电话"))
+    row["发件人联系人"] = "JM"
+    row["发件人地址第一行"] = "14207 Monte Vista Ave"
+    row["发件人城市"] = "Chino Hills"
+    row["发件人州"] = "CA"
+    row["发件人邮编"] = "91180"
+    row["发件人电话"] = "+1 619-854-2705"
+    row["尺寸单位"] = "inch"
+    row["预报重量单位"] = "lb"
+    row["*箱数"] = "1"
+    row["*重量(KG)"] = ai_val
+    row["*长(CM)"] = aj_val
+    row["*宽(CM)"] = "5"
+    row["*高(CM)"] = "1"
+    row["申报中文.1"] = "定制装饰画"
+    row["申报英文.1"] = "Customer Canvas"
+    row["数量.1"] = "1"
+    row["价值.1"] = "35"
+    row["申报重量.1"] = ai_val
+    return row
+
+
+def generate_shipping_list(df, pdf_title):
+    """Build upload shipping-number DataFrame with Chinese headers and deduplicated orders."""
+    print("最终打印清单 columns:", list(df.columns))
+    _validate_print_list_columns(df)
+
+    short_code, date_str = _parse_pdf_title(pdf_title)
+    merged_df = _merge_print_list_by_seq_d(df)
+    merged_df["_aj_value"] = merged_df.apply(calculate_aj, axis=1)
+
+    shipping_rows = merged_df.apply(
+        lambda print_row: _build_shipping_data_row(print_row, short_code, date_str),
+        axis=1,
+    )
+    return pd.DataFrame(shipping_rows.tolist(), columns=SHIPPING_HEADER)
+
+
+def export_shipping_list_excel(shipping_df):
+    """Export shipping-list DataFrame to Excel bytes with Chinese header row."""
+    output = io.BytesIO()
+    shipping_df.to_excel(output, index=False, header=True, engine="openpyxl")
     return output.getvalue()

@@ -5,6 +5,7 @@ import io
 import base64
 import html as html_lib
 import os
+import zipfile
 from PIL import Image
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -468,3 +469,32 @@ def _draw_native_pdf(df, image_map, pdf_title):
 
 def generate_pdf_with_images(df, image_map, pdf_title):
     return _draw_native_pdf(df, image_map, pdf_title)
+
+
+def _resolve_poppler_path():
+    """Optional Poppler bin directory for pdf2image on Windows."""
+    path = (os.environ.get("POPPLER_PATH") or "").strip()
+    return path or None
+
+
+def pdf_to_images_zip(pdf_bytes, safe_title):
+    """Convert final PDF pages to JPG files and return an in-memory ZIP archive."""
+    from pdf2image import convert_from_bytes
+
+    poppler_path = _resolve_poppler_path()
+    convert_kwargs = {"fmt": "jpeg"}
+    if poppler_path:
+        convert_kwargs["poppler_path"] = poppler_path
+
+    images = convert_from_bytes(pdf_bytes, **convert_kwargs)
+    seq_width = max(2, len(str(len(images))))
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for page_idx, image in enumerate(images, start=1):
+            filename = f"0-{page_idx:0{seq_width}d}-{safe_title}.jpg"
+            img_buffer = io.BytesIO()
+            image.save(img_buffer, format="JPEG")
+            zf.writestr(filename, img_buffer.getvalue())
+
+    return zip_buffer.getvalue()

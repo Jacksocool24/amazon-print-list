@@ -10,10 +10,23 @@ import streamlit.components.v1 as components
 from logic_engine import (
     build_image_index,
     excel_text_str,
+    export_shipping_list_excel,
+    generate_rename_list,
+    generate_shipping_list,
     process_data,
     save_to_excel_with_merge,
 )
-from pdf_generator import build_pdf_html_content, generate_pdf_with_images
+from pdf_generator import build_pdf_html_content, generate_pdf_with_images, pdf_to_images_zip
+
+_INVALID_FILENAME_CHARS = r'\/:*?"<>|'
+
+
+def sanitize_download_filename(title, default="final_print_list"):
+    """Strip unsafe path characters for Windows/macOS download filenames."""
+    name = (title or "").strip() or default
+    for ch in _INVALID_FILENAME_CHARS:
+        name = name.replace(ch, "_")
+    return name.strip(" .") or default
 
 
 def sync_data():
@@ -194,26 +207,37 @@ if st.session_state.get("show_preview"):
                         final_df["序号E"].astype(str) + "-" + final_df["材质"] + "-" + final_df["尺寸"].astype(str)
                     )
                     excel_data = save_to_excel_with_merge(final_df, cached["source_file_bytes"], image_map)
+                    rename_list_data = generate_rename_list(final_df)
+                    shipping_list_data = export_shipping_list_excel(
+                        generate_shipping_list(final_df, pdf_title)
+                    )
+                    safe_pdf_title = sanitize_download_filename(pdf_title)
                     with st.spinner("Generating PDF..."):
                         pdf_data = generate_pdf_with_images(
                             final_df.drop(columns=["Original Row Index"]),
                             image_map,
                             pdf_title,
                         )
+                    with st.spinner("Generating print list images..."):
+                        images_zip_data = pdf_to_images_zip(pdf_data, safe_pdf_title)
 
                     st.session_state.processed_data_cache["excel_data"] = excel_data
+                    st.session_state.processed_data_cache["rename_list_data"] = rename_list_data
+                    st.session_state.processed_data_cache["shipping_list_data"] = shipping_list_data
                     st.session_state.processed_data_cache["pdf_data"] = pdf_data
+                    st.session_state.processed_data_cache["images_zip_data"] = images_zip_data
                     st.session_state.show_downloads = True
 
             if st.session_state.get("show_downloads"):
                 st.markdown("---")
                 st.success("🎉 生成完毕！请点击下方按钮下载：")
                 cached = st.session_state.get("processed_data_cache", {})
+                safe_pdf_title = sanitize_download_filename(pdf_title)
                 if cached.get("excel_data"):
                     st.download_button(
                         label="📥 下载最终打印清单 (Excel)",
                         data=cached["excel_data"],
-                        file_name="final_print_list.xlsx",
+                        file_name=f"{safe_pdf_title}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True,
                     )
@@ -221,7 +245,31 @@ if st.session_state.get("show_preview"):
                     st.download_button(
                         label="📥 下载最终打印清单 (PDF)",
                         data=cached["pdf_data"],
-                        file_name="final_print_list.pdf",
+                        file_name=f"{safe_pdf_title}.pdf",
                         mime="application/pdf",
+                        use_container_width=True,
+                    )
+                if cached.get("images_zip_data"):
+                    st.download_button(
+                        label="🖼️ 下载打印清单图片(ZIP)",
+                        data=cached["images_zip_data"],
+                        file_name=f"{safe_pdf_title}_images.zip",
+                        mime="application/zip",
+                        use_container_width=True,
+                    )
+                if cached.get("rename_list_data"):
+                    st.download_button(
+                        label="📥 下载图片重命名清单(Execl)",
+                        data=cached["rename_list_data"],
+                        file_name="图片重命名清单.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                    )
+                if cached.get("shipping_list_data"):
+                    st.download_button(
+                        label="📥 下载上传物流单号(Excel)",
+                        data=cached["shipping_list_data"],
+                        file_name="上传物流单号.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True,
                     )
