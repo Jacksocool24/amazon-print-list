@@ -628,6 +628,8 @@ def _build_shipping_data_row(print_row, short_code, date_str):
     row["*国家编码"] = "US"
     row["*渠道编码"] = c_val
     row["参考编号1"] = f"{ref_id}-{order_no}"
+    row["签收服务"] = "No"
+    row["*是否是FBA"] = "FALSE"
     row["收件人联系人"] = f"{ref_id}-{name}"
     row["收件人邮编"] = excel_text_str(_read_print_list_value(print_row, "邮编"))
     row["收件人地址第一行"] = excel_text_str(_read_print_list_value(print_row, "地址一"))
@@ -669,7 +671,10 @@ def generate_shipping_list(df, pdf_title):
         lambda print_row: _build_shipping_data_row(print_row, short_code, date_str),
         axis=1,
     )
-    return pd.DataFrame(shipping_rows.tolist(), columns=SHIPPING_HEADER)
+    shipping_df = pd.DataFrame(shipping_rows.tolist(), columns=SHIPPING_HEADER)
+    shipping_df["签收服务"] = "No"
+    shipping_df["*是否是FBA"] = "FALSE"
+    return shipping_df
 
 
 def export_shipping_list_excel(shipping_df):
