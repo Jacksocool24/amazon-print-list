@@ -471,19 +471,32 @@ def generate_pdf_with_images(df, image_map, pdf_title):
     return _draw_native_pdf(df, image_map, pdf_title)
 
 
+PDF_IMAGE_DPI = 150
+PDF_IMAGE_SIZE = (1241, 1754)
+
+
 def pdf_to_images_zip(pdf_bytes, pdf_title):
-    """Convert final PDF pages to PNG files via PyMuPDF and return an in-memory ZIP archive."""
+    """Convert final PDF pages to 150 DPI, 1241x1754 PNG files in an in-memory ZIP archive."""
     import fitz
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     zip_buffer = io.BytesIO()
+    render_matrix = fitz.Matrix(PDF_IMAGE_DPI / 72, PDF_IMAGE_DPI / 72)
 
     try:
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             for page_num in range(len(doc)):
                 page = doc.load_page(page_num)
-                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-                img_data = pix.tobytes("png")
+                pix = page.get_pixmap(matrix=render_matrix)
+                mode = "RGBA" if pix.alpha else "RGB"
+                img = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
+                if mode == "RGBA":
+                    img = img.convert("RGB")
+                img = img.resize(PDF_IMAGE_SIZE, Image.Resampling.LANCZOS)
+
+                img_byte_arr = io.BytesIO()
+                img.save(img_byte_arr, format="PNG", dpi=(PDF_IMAGE_DPI, PDF_IMAGE_DPI))
+                img_data = img_byte_arr.getvalue()
 
                 seq = str(page_num + 1).zfill(2)
                 img_name = f"0-{seq}-{pdf_title}.png"
